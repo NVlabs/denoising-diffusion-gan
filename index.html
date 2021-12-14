@@ -1,0 +1,414 @@
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+
+<script src="http://www.google.com/jsapi" type="text/javascript"></script>
+<script type="text/javascript">google.load("jquery", "1.3.2");</script>
+
+<style type="text/css">
+body {
+    font-family: "Titillium Web", "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
+    font-weight: 300;
+    font-size: 17px;
+    margin-left: auto;
+    margin-right: auto;
+    width: 980px;
+}
+h1 {
+    font-weight:300;
+    line-height: 1.15em;
+}
+
+h2 {
+    font-size: 1.75em;
+}
+a:link,a:visited {
+    color: #B6486F;
+    text-decoration: none;
+}
+a:hover {
+    color: #208799;
+}
+h1, h2, h3 {
+    text-align: center;
+}
+h1 {
+    font-size: 40px;
+    font-weight: 500;
+}
+h2 {
+    font-weight: 400;
+    margin: 16px 0px 4px 0px;
+}
+.paper-title {
+    padding: 16px 0px 16px 0px;
+}
+section {
+    margin: 32px 0px 32px 0px;
+    text-align: justify;
+    clear: both;
+}
+.col-5 {
+     width: 20%;
+     float: left;
+}
+.col-4 {
+     width: 25%;
+     float: left;
+}
+.col-3 {
+     width: 33%;
+     float: left;
+}
+.col-2 {
+     width: 50%;
+     float: left;
+}
+.col-1 {
+     width: 100%;
+     float: left;
+}
+.row, .author-row, .affil-row {
+     overflow: auto;
+}
+.author-row, .affil-row {
+    font-size: 26px;
+}
+.row {
+    margin: 16px 0px 16px 0px;
+}
+.authors {
+    font-size: 26px;
+}
+.affil-row {
+    margin-top: 16px;
+}
+.teaser {
+    max-width: 100%;
+}
+.text-center {
+    text-align: center;  
+}
+.screenshot {
+    width: 256px;
+    border: 1px solid #ddd;
+}
+.screenshot-el {
+    margin-bottom: 16px;
+}
+hr {
+    height: 1px;
+    border: 0; 
+    border-top: 1px solid #ddd;
+    margin: 0;
+}
+.material-icons {
+    vertical-align: -6px;
+}
+p {
+    line-height: 1.25em;
+}
+.caption {
+    font-size: 16px;
+    /*font-style: italic;*/
+    color: #666;
+    text-align: center;
+    margin-top: 4px;
+    margin-bottom: 10px;
+}
+video {
+    display: block;
+    margin: auto;
+}
+figure {
+    display: block;
+    margin: auto;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+#bibtex pre {
+    font-size: 14px;
+    background-color: #eee;
+    padding: 16px;
+}
+.blue {
+    color: #2c82c9;
+    font-weight: bold;
+}
+.orange {
+    color: #d35400;
+    font-weight: bold;
+}
+.flex-row {
+    display: flex;
+    flex-flow: row wrap;
+    justify-content: space-around;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+.paper-btn {
+  position: relative;
+  text-align: center;
+
+  display: inline-block;
+  margin: 8px;
+  padding: 8px 8px;
+
+  border-width: 0;
+  outline: none;
+  border-radius: 2px;
+  
+  background-color: #B6486F;
+  color: white !important;
+  font-size: 20px;
+  width: 100px;
+  font-weight: 600;
+}
+.paper-btn-parent {
+    display: flex;
+    justify-content: center;
+    margin: 16px 0px;
+}
+.paper-btn:hover {
+    opacity: 0.85;
+}
+.container {
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+.venue {
+    /*color: #B6486F;*/
+    font-size: 30px;
+
+}
+
+</style>
+
+<!-- End : Google Analytics Code -->
+<script type="text/javascript" src="../js/hidebib.js"></script>
+    <link href='https://fonts.googleapis.com/css?family=Titillium+Web:400,600,400italic,600italic,300,300italic' rel='stylesheet' type='text/css'>
+    <head>
+        <title>Tackling the Generative Learning Trilemma with Denoising Diffusion GANs</title>
+        <meta property="og:description" content="Tackling the Generative Learning Trilemma with Denoising Diffusion GANs"/>
+        <link href="https://fonts.googleapis.com/css2?family=Material+Icons" rel="stylesheet">
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:creator" content="@ArashVahdat">
+        <meta name="twitter:title" content="Tackling the Generative Learning Trilemma with Denoising Diffusion GANs">
+        <meta name="twitter:description" content="Score-based generative models (SGMs), also known as denoising diffusion models, have recently demonstrated impressive results in terms of both sample quality and distribution coverage. However, they are usually applied directly in data space and often require thousands of network evaluations for sampling. We propose the Latent Score-based Generative Model (LSGM), a novel approach that trains SGMs in a latent space, relying on the variational autoencoder framework. Moving from data to latent space allows us to train more expressive generative models, apply SGMs to non-continuous data, and learn smoother SGMs in a smaller space, resulting in fewer network evaluations and faster sampling.">
+        <meta name="twitter:image" content="https://nvlabs.github.io/LSGM/assets/thumbnail.png">
+    </head>
+
+ <body>
+<div class="container">
+    <div class="paper-title">
+      <h1>Tackling the Generative Learning Trilemma with Denoising Diffusion GANs</h1>
+    </div>
+
+    <div id="authors">
+    	<center>
+        <div class="author-row">
+            <div class="col-3 text-center"><a href="https://xavierxiao.github.io/">Zhisheng Xiao</a><sup>1</sup></div>
+            <div class="col-3 text-center"><a href="https://karstenkreis.github.io/">Karsten Kreis</a><sup>2</sup></div>
+            <div class="col-3 text-center"><a href="http://latentspace.cc/">Arash Vahdat</a><sup>2</sup></div>
+        </div>
+
+        <center>
+            <table align=center width=500px>
+            <tr>
+                <td align=center width=200px>
+                <center>
+                <span style="font-size:20px"><sup>1</sup> The University of Chicago</span>
+                </center>
+                </td>
+                <td align=center width=200px>
+                <center>
+                <span style="font-size:20px"><sup>2</sup> NVIDIA</span>
+                </center>
+                </td>
+            </tr>
+            </table>
+        </center>
+
+<!--         <div class="affil-row">
+            <div class="col-2 text-center"><sup>1</sup>The University of Chicago</div>
+            <div class="col-2 text-center"><sup>2</sup>NVIDIA</div>
+        </div> -->
+        </center>
+        <br>
+        <center><img width="20%" src="./assets/nvidialogo.png" style="margin-top: 20px; margin-bottom: 3px;"></center>
+        <br>
+        <div style="clear: both">
+            <div class="paper-btn-parent">
+            <a class="paper-btn" href="./index.html">
+                <span class="material-icons"> description </span> 
+                 Paper
+            </a>
+            <a class="paper-btn" href="https://github.com/NVlabs/denoising-diffusion-gan">
+                <span class="material-icons"> code </span> 
+                 Code
+            </a>
+        </div></div>
+    </div>
+
+    <section id="teaser-image">
+            </p><figure style="margin-top: 20px; margin-bottom: 20px;">
+                <img width="100%" src="./assets/teaser.png" style="margin-bottom: 20px;">
+                <p class="caption">
+                    Generative denoising diffusion models typically assume that the denoising distribution can be modeled by a Gaussian distribution. This assumption holds only for small denoising steps, which in practice translates to thousands of denoising steps in the synthesis process. In our denoising diffusion GANs, we represent the denoising model using multimodal and complex conditional GANs, enabling us to efficiently generate data in as few as two steps.
+                </p><p class="caption">
+            </p>
+    </section>
+
+    <section id="news">
+        <h2>News</h2>
+        <hr>
+        <div class="row">
+            <!-- <div><span class="material-icons"> event </span> [Dec 2021] Paper presented at NeurIPS 2021.</div> 
+            <div><span class="material-icons"> event </span> [Feb 2022] Our <a href="https://github.com/NVlabs/denoising-diffusion-gan">code</a> has been released.</div>
+            <div><span class="material-icons"> event </span> [Jan 2022] Our paper is accepted to NeurIPS 2021!</div> -->
+            <!--
+            <div><span class="material-icons"> event </span> [Dec 2021] <a href="https://twitter.com/ArashVahdat/status/1403362799481364485">Twitter thread</a> explaining the work in detail.</div> -->
+            <div><span class="material-icons"> event </span> [Dec 2021] <a href="https://nvlabs.github.io/denoising-diffusion-gan">Project page</a> released!</div>
+            <div><span class="material-icons"> event </span> [Dec 2021] Draft released on <a href="./index.html">arXiv</a>!</div>
+        </div>
+    </section>
+
+    <section id="abstract"/>
+        <h2>Abstract</h2>
+        <hr>
+        <div class="flex-row">
+            <p>
+                A wide variety of deep generative models has been developed in the past decade. Yet, these models often struggle with simultaneously addressing three key requirements including: high sample quality, mode coverage, and fast sampling. We call the challenge imposed by these requirements <i>the generative learning trilemma</i>, as the existing models often trade some of them for others. Particularly, denoising diffusion models have shown impressive sample quality and diversity, but their expensive sampling does not yet allow them to be applied in many real-world applications. In this paper, we argue that slow sampling in these models is fundamentally attributed to the Gaussian assumption in the denoising step which is justified only for small step sizes. To enable denoising with large steps, and hence, to reduce the total number of denoising steps, we propose to model the denoising distribution using a complex multimodal distribution. We introduce <i>denoising diffusion generative adversarial networks (denoising diffusion GANs)</i> that model each denoising step using a multimodal conditional GAN. Through extensive evaluations, we show that denoising diffusion GANs obtain sample quality and diversity competitive with original diffusion models while being 2000&times; faster on the CIFAR-10 dataset. Compared to traditional GANs, our model exhibits better mode coverage and sample diversity. To the best of our knowledge, denoising diffusion GAN is the first model that reduces sampling cost in diffusion models to an extent that allows them to be applied to real-world applications inexpensively.
+            </p>
+        </div>
+    </section>
+
+
+    <section id="intro"/>
+        <h2>The Generative Learning Trilemma</h2>
+        <hr>
+        <div class="flex-row">
+            <p> In the past decade, a plethora of deep generative models has been developed for various domains such as images, audio, point clouds and graphs. However, current generative learning frameworks cannot yet simultaneously satisfy three key requirements, often needed for their wide adoption in real-world problems. These requirements include (i) high-quality sampling, (ii) mode coverage and sample diversity, and (iii) fast and computationally inexpensive sampling. For example, most current works in image synthesis focus on high-quality generation. However, mode coverage and data diversity are important for better representing minorities and for reducing the negative social impacts of generative models. Additionally, applications such as interactive image editing or real-time speech synthesis require fast sampling. Here, we identify the challenge posed by these requirements as the <i>generative learning trilemma</i>, since existing models usually compromise between them.
+            </p>
+        </div>
+        <figure style="width: 100%">
+            <center><img width="40%" src="assets/trilemma.gif"></center>
+        </figure>
+        <div class="flex-row">
+            <p>
+            The figure above summarizes how mainstream generative frameworks tackle the trilemma. Generative adversarial networks (GANs) generate high-quality samples rapidly, but they are known for poor mode coverage. Conversely, variational autoencoders (VAEs)  and normalizing flows cover data modes faithfully, but they often suffer from low sample quality. Recently, diffusion models have emerged as powerful generative models. These models demonstrate surprisingly good results in sample quality, beating GANs in image generation. They also feature good mode coverage and sample diversity, indicated by high likelihood. Diffusion models have already been applied to a variety of generation tasks. However, sampling from them often requires thousands of neural network evaluations, making their application to real-world problems expensive. <b>In this paper, we tackle the generative learning trilemma by reformulating denoising diffusion models specifically for fast sampling while maintaining strong mode coverage and sample quality. </b>
+            </p>
+        </div>
+    </section>
+
+
+    <section id="advantages"/>
+        <h2>Why is Sampling from Denoising Diffusion Models so Slow?</h2>
+        <hr>
+        <div class="flex-row">
+              <p> Diffusion models define a forward diffusion process that maps data to noise by gradually perturbing the input data. Data generation is achieved using a parametrized reverse process that performs iterative denoising in thousands of steps, starting from random noise. In this paper, we investigate the slow sampling issue of diffusion models and we observe that diffusion models commonly assume that the denoising distribution in the reverse can be approximated by Gaussian distributions. However, it is known that the Gaussian assumption holds only in the infinitesimal limit of small denoising steps, which leads to the requirement of a large number of steps in the reverse process. When the reverse process uses larger step sizes (i.e., it has fewer denoising steps), we need a non-Gaussian multimodal distribution for modeling the denoising distribution. Intuitively, in image synthesis, the multimodal distribution arises from the fact that multiple plausible clean images may correspond to the same noisy image. </p>
+        </div>
+        <figure style="width: 100%">
+            <center><img width="90%" src="assets/denoising.gif"></center>
+            <p class="caption" style="margin-bottom: 24px;">
+                <b>Top</b>: Evolution of a 1D data distribution q(x<sub>0</sub>) according to the forward diffusion process. <b>Bottom</b>: Visualizations of the true denoising distribution when conditioning on a fixed x<sub>5</sub> with varying step sizes shown in different colors. The true denoising distribution for a small step size (shown in yellow) is close to a Gaussian distribution. However, it becomes more complex and multimodal as the step size increases. 
+            </p>
+        </figure>
+    </section>
+
+    <section id="novelties"/>
+        <h2>Denoising Diffusion GANs</h2>
+        <hr>
+        <div class="flex-row">
+            <p>Inspired by the observation above, we propose to parametrize the denoising distribution with an expressive multimodal distribution to enable denoising with large steps. In particular, we introduce a novel generative model, termed as <i>denoising diffusion GAN</i>, in which the denoising distributions are modeled with conditional GANs. </p>
+            <p>Our adversarial training setup is shown below. Given a training image x<sub>0</sub>, we use the forward Gaussian diffusion process to sample from x<sub>t-1</sub> and x<sub>t</sub>, the diffused samples at two successive steps. Given x<sub>t</sub>, our conditional denoising GAN first stochastically generates x'<sub>0</sub> and then uses the tractable posterior distribution q(x<sub>t-1</sub>|x<sub>t</sub>, x<sub>0</sub>) to generate x'<sub>t-1</sub>. The discriminator is trained to distinguish between the real (x<sub>t-1</sub>, x<sub>t</sub>) vs. fake  (x'<sub>t-1</sub>, x<sub>t</sub>) pairs. We train both generator and discriminator using the non-saturated GAN objective simultaneously for all time steps t. Generators and discriminators for different steps t share parameters, while additionally conditioning on t-embeddings, similar to regular denoising diffusion models.</p>
+            <p>After training, we generate novel instances by sampling from noise and iteratively denoising it in a few steps using our denoising diffusion GAN generator.</p>
+        </div>
+        <figure style="width: 100%">
+            <center><img width="100%" src="assets/pipeline.gif"></center>
+            <p class="caption" style="margin-bottom: 24px;">
+                The training process of denoising diffusion GAN. We train a conditional GAN generator to denoise input x<sub>t</sub> using an adversarial loss for different steps in the diffusion process.
+            </p>
+        </figure>
+    </section>
+
+    <section id="advantages"/>
+        <h2>Advantages over Traditional GANs</h2>
+        <hr>
+        <div class="flex-row">
+            <p>One natural question for our model is, why not just train a GAN that can generate samples in one shot using a traditional setup, in contrast to our model that iteratively generates samples by denoising? Our model has several advantages over traditional GANs: GANs are known to suffer from training instability and mode collapse, and some possible reasons include the difficulty of directly generating samples from a complex distribution in one-shot, and the overfitting issue when the discriminator only looks at clean samples. In contrast, our model breaks the generation process into several conditional denoising diffusion steps in which each step is relatively simple to model, due to the strong conditioning on x<sub>t</sub>. Moreover, the diffusion process smoothens the data distribution, making the discriminator less likely to overfit. Thus, we observe that our model exhibits better training stability and mode coverage. </p>
+        </div>
+    </section>
+
+
+    <section id="results">
+        <h2>Results</h2>
+        <hr>
+        <div class="flex-row">
+        <p>In image generation, we observe that our model achieves sample quality and mode coverage competitive with diffusion models, while requiring only as few as two denoising steps, achieving up to 2,000&times; speed-up in sampling compared to predictor-corrector sampling on CIFAR-10. Compared to traditional GANs, we show that our model significantly outperforms state-of-the-art GANs in sample diversity, while being competitive in sample fidelity.</p>
+        </div>
+        <figure style="width: 100%;">
+            <a href="assets/cifar10.png">
+                <img width="100%" src="assets/cifar10.png">
+            </a>
+            <p class="caption" style="margin-bottom: 24px;">
+                 <b>Left:</b> Sample quality vs. sampling time is shown for different diffusion-based generative models for the CIFAR-10 image modeling benchmark. Denoising diffusion GAN achieves a speedup of several orders of magnitude compared to previous diffusion models while maintaining similar synthesis quality. <b>Right:</b> Generated CIFAR-10 samples.
+            </p>
+        </figure>
+        <br> 
+        <figure>
+        <figure style="width: 100%;">
+            <a href="assets/results.png">
+                <img width="100%" src="assets/results.png">
+            </a>
+            <p class="caption" style="margin-bottom: 24px;">
+                 Qualitative results on CelebA-HQ 256 (left) and LSUN Church Outdoor 256 (right).
+            </p>
+        </figure>
+        <br>
+        <figure style="width: 100%;">
+            <a href="assets/denoising.png">
+                <img width="100%" src="assets/denoising.png">
+            </a>
+            <p class="caption" style="margin-bottom: 24px;">
+                 <b>Top:</b> Visualization of a training sample x<sub>0</sub> at different steps of the forward diffusion process. <b>Bottom</b>: Each column visualizes 3 samples generated by our conditional GAN denoising model p<sub>&theta;</sub>(x<sub>0</sub>|x<sub>t</sub>) conditioned on the diffused sample at step t.
+            </p>
+        </figure>
+
+    </section>
+    
+    <section id="paper">
+        <h2>Paper</h2>
+        <hr>
+        <div class="flex-row">
+            <div style="box-sizing: border-box; padding: 16px; margin: auto;">
+                <a href="https://arxiv.org/abs/2106.05931"><img class="screenshot" src="assets/paper_preview.png"></a>
+            </div>
+            <div style="width: 50%; font-size: 20px;">
+                <p><b>Tackling the Generative Learning Trilemma with Denoising Diffusion GANs</b></p>
+                <p>Zhisheng Xiao*, Karsten Kreis, Arash Vahdat</p>
+                <p><i>* Work done during an internship at NVIDIA.</i></p>
+                <div><span class="material-icons"> description </span><a href="./index.html"> arXiv version</a></div>
+                <div><span class="material-icons"> insert_comment </span><a href="assets/xiao2021diffusionGAN.bib"> BibTeX</a></div>
+                <div><span class="material-icons"> integration_instructions </span><a href="https://github.com/NVlabs/denoising-diffusion-gan"> Code</a></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="bibtex">
+        <h2>Citation</h2>
+        <hr>
+        <pre><code>@article{xiao2021diffusionGAN,
+  title={Tackling the Generative Learning Trilemma with Denoising Diffusion GANs},
+  author={Xiao, Zhisheng and Kreis, Karsten and Vahdat, Arash},
+  journal={arXiv preprint},
+  year={2021}
+}</code></pre>
+    </section>
+</div>
+</body>
+</html>
+

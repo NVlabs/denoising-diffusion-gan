@@ -1,0 +1,10 @@
+torch==1.8.0
+torchvision==0.9.0
+pillow
+matplotlib
+tensorboard
+tensorboardX
+lmdb
+matplotlib
+scipy
+ninja

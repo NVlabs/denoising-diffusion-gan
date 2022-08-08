@@ -128,7 +128,7 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
 
 #%%
 def sample_and_test(args):
-    torch.manual_seed(42)
+    torch.manual_seed(args.seed)
     device = 'cuda:0'
     
     if args.dataset == 'cifar10':

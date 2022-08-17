@@ -66,8 +66,10 @@ class NCSNpp(nn.Module):
     self.not_use_tanh = config.not_use_tanh
     self.act = act = nn.SiLU()
     self.z_emb_dim = z_emb_dim = config.z_emb_dim
-    
     self.nf = nf = config.num_channels_dae
+    self.cond_proj = nn.Linear(config.cond_size, self.nf*4) 
+    self.cond_proj.weight.data = default_initializer()(self.cond_proj.weight.shape)
+
     ch_mult = config.ch_mult
     self.num_res_blocks = num_res_blocks = config.num_res_blocks
     self.attn_resolutions = attn_resolutions = config.attn_resolutions
@@ -115,10 +117,12 @@ class NCSNpp(nn.Module):
       modules.append(nn.Linear(nf * 4, nf * 4))
       modules[-1].weight.data = default_initializer()(modules[-1].weight.shape)
       nn.init.zeros_(modules[-1].bias)
-
-    AttnBlock = functools.partial(layerspp.AttnBlockpp,
-                                  init_scale=init_scale,
-                                  skip_rescale=skip_rescale)
+    if config.cross_attention:
+      AttnBlock = functools.partial(layers.CondAttnBlock, context_dim=config.cond_size)
+    else:
+      AttnBlock = functools.partial(layerspp.AttnBlockpp,
+                                    init_scale=init_scale,
+                                    skip_rescale=skip_rescale)
 
     Upsample = functools.partial(layerspp.Upsample,
                                  with_conv=resamp_with_conv, fir=fir, fir_kernel=fir_kernel)
@@ -277,7 +281,7 @@ class NCSNpp(nn.Module):
     self.z_transform = nn.Sequential(*mapping_layers)
     
 
-  def forward(self, x, time_cond, z):
+  def forward(self, x, time_cond, z, cond=None):
     # timestep/noise_level embedding; only for continuous training
     zemb = self.z_transform(z)
     modules = self.all_modules
@@ -296,9 +300,14 @@ class NCSNpp(nn.Module):
 
     else:
       raise ValueError(f'embedding type {self.embedding_type} unknown.')
-
+    
+    if cond is not None:
+      cond_pooled, cond, cond_mask = cond
+    
     if self.conditional:
       temb = modules[m_idx](temb)
+      if cond is not None:
+        temb = temb + self.cond_proj(cond_pooled)
       m_idx += 1
       temb = modules[m_idx](self.act(temb))
       m_idx += 1
@@ -322,7 +331,10 @@ class NCSNpp(nn.Module):
         h = modules[m_idx](hs[-1], temb, zemb)
         m_idx += 1
         if h.shape[-1] in self.attn_resolutions:
-          h = modules[m_idx](h)
+          if type(modules[m_idx]) == layers.CondAttnBlock:
+            h = modules[m_idx](h, cond, cond_mask)
+          else:
+            h = modules[m_idx](h)
           m_idx += 1
 
         hs.append(h)
@@ -354,7 +366,10 @@ class NCSNpp(nn.Module):
     h = hs[-1]
     h = modules[m_idx](h, temb, zemb)
     m_idx += 1
-    h = modules[m_idx](h)
+    if type(modules[m_idx]) == layers.CondAttnBlock:
+      h = modules[m_idx](h, cond, cond_mask)
+    else:
+      h = modules[m_idx](h)
     m_idx += 1
     h = modules[m_idx](h, temb, zemb)
     m_idx += 1
@@ -368,7 +383,10 @@ class NCSNpp(nn.Module):
         m_idx += 1
 
       if h.shape[-1] in self.attn_resolutions:
-        h = modules[m_idx](h)
+        if type(modules[m_idx]) == layers.CondAttnBlock:
+          h = modules[m_idx](h, cond, cond_mask)
+        else:
+          h = modules[m_idx](h)
         m_idx += 1
 
       if self.progressive != 'none':
@@ -429,3 +447,4 @@ class NCSNpp(nn.Module):
         return torch.tanh(h)
     else:
         return h
+

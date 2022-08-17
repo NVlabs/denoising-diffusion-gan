@@ -96,11 +96,12 @@ class DownConvBlock(nn.Module):
 class Discriminator_small(nn.Module):
   """A time-dependent discriminator for small images (CIFAR10, StackMNIST)."""
 
-  def __init__(self, nc = 3, ngf = 64, t_emb_dim = 128, act=nn.LeakyReLU(0.2)):
+  def __init__(self, nc = 3, ngf = 64, t_emb_dim = 128, act=nn.LeakyReLU(0.2), cond_size=768):
     super().__init__()
     # Gaussian random feature embedding layer for time
     self.act = act
-    
+    self.cond_proj = nn.Linear(cond_size, ngf*8) 
+    # self.cond_proj.weight.data = default_initializer()(self.cond_proj.weight.shape)
     
     self.t_embed = TimestepEmbedding(
         embedding_dim=t_emb_dim,
@@ -131,10 +132,11 @@ class Discriminator_small(nn.Module):
     self.stddev_feat = 1
     
         
-  def forward(self, x, t, x_t):
-    t_embed = self.act(self.t_embed(t))  
-    
-  
+  def forward(self, x, t, x_t, cond=None):
+    t_embed = self.t_embed(t)
+    # if cond is not None:
+        # t_embed = t_embed + self.cond_proj(cond)
+    t_embed = self.act(t_embed)  
     input_x = torch.cat((x, x_t), dim = 1)
     
     h0 = self.start_conv(input_x)
@@ -159,10 +161,9 @@ class Discriminator_small(nn.Module):
     
     out = self.final_conv(out)
     out = self.act(out)
-   
     
     out = out.view(out.shape[0], out.shape[1], -1).sum(2)
-    out = self.end_linear(out)
+    out = self.end_linear(out) + (self.cond_proj(cond) * out).sum(dim=1, keepdim=True)
     
     return out
 
@@ -170,9 +171,10 @@ class Discriminator_small(nn.Module):
 class Discriminator_large(nn.Module):
   """A time-dependent discriminator for large images (CelebA, LSUN)."""
 
-  def __init__(self, nc = 1, ngf = 32, t_emb_dim = 128, act=nn.LeakyReLU(0.2)):
+  def __init__(self, nc = 1, ngf = 32, t_emb_dim = 128, act=nn.LeakyReLU(0.2), cond_size=768):
     super().__init__()
     # Gaussian random feature embedding layer for time
+    self.cond_proj = nn.Linear(cond_size, ngf*8) 
     self.act = act
     
     self.t_embed = TimestepEmbedding(
@@ -202,8 +204,9 @@ class Discriminator_large(nn.Module):
     self.stddev_feat = 1
     
         
-  def forward(self, x, t, x_t):
-    t_embed = self.act(self.t_embed(t))  
+  def forward(self, x, t, x_t, cond=None):
+    t_embed = self.t_embed(t)
+    t_embed = self.act(t_embed)  
     
     input_x = torch.cat((x, x_t), dim = 1)
     
@@ -233,7 +236,6 @@ class Discriminator_large(nn.Module):
     out = self.act(out)
     
     out = out.view(out.shape[0], out.shape[1], -1).sum(2)
-    out = self.end_linear(out)
-    
+    out = self.end_linear(out) + (self.cond_proj(cond) * out).sum(dim=1, keepdim=True)
     return out
 

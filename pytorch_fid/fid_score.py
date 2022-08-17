@@ -140,7 +140,7 @@ def get_activations(files, model, batch_size=50, dims=2048, device='cpu', resize
                                              batch_size=batch_size,
                                              shuffle=False,
                                              drop_last=False,
-                                             num_workers=cpu_count())
+                                             num_workers=8)
 
     pred_arr = np.empty((len(files), dims))
 
@@ -148,7 +148,7 @@ def get_activations(files, model, batch_size=50, dims=2048, device='cpu', resize
 
     for batch in tqdm(dataloader):
         batch = batch.to(device)
-
+        print(batch.shape, batch.min(), batch.max)
         with torch.no_grad():
             pred = model(batch)[0]
 

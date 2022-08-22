@@ -8,7 +8,10 @@ if [[ "$machine" == jurecadc ]]; then
     ml OpenMPI/4.1.2
     ml CUDA/11.5
     ml cuDNN/8.3.1.22-CUDA-11.5
-    ml NCCL/2.12.7-1-CUDA-11.5
+    
+    ml NCCL/2.11.4-CUDA-11.5
+    #ml NCCL/2.12.7-1-CUDA-11.5
+    
     ml PyTorch/1.11-CUDA-11.5
     ml Horovod/0.24
     ml torchvision/0.12.0

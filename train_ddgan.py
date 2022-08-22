@@ -195,14 +195,14 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, cond=None
 from utils import ResampledShards2
 
 def train(rank, gpu, args):
-    from score_sde.models.discriminator import Discriminator_small, Discriminator_large
+    from score_sde.models.discriminator import Discriminator_small, Discriminator_large, CondAttnDiscriminator, SmallCondAttnDiscriminator
     from score_sde.models.ncsnpp_generator_adagn import NCSNpp
     from EMA import EMA
     
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
-    device = torch.device('cuda:{}'.format(gpu))
+    device = "cuda"
     
     batch_size = args.batch_size
     
@@ -254,19 +254,28 @@ def train(rank, gpu, args):
         dataset = ImageFolder(root=args.dataset_root, transform=train_transform)
     elif args.dataset == 'wds':
         import webdataset as wds
-        train_transform = transforms.Compose([
-                transforms.Resize(args.image_size),
-                transforms.CenterCrop(args.image_size),
-                # transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
+        if args.preprocessing == "resize":
+            train_transform = transforms.Compose([
+                    transforms.Resize(args.image_size),
+                    transforms.CenterCrop(args.image_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
             ])
-        # pipeline = [wds.SimpleShardList(args.dataset_root)]
+        elif args.preprocessing == "random_resized_crop_v1":
+            train_transform = transforms.Compose([
+                    transforms.RandomResizedCrop(256, scale=(0.95, 1.0), interpolation=3),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
+            ])
         pipeline = [ResampledShards2(args.dataset_root)]
         pipeline.extend([
             wds.split_by_node,
             wds.split_by_worker,
             wds.tarfile_to_samples(handler=log_and_continue),
+            wds.shuffle(
+                bufsize=5000,
+                initial=1000,
+            ),
         ])
         pipeline.extend([
             wds.decode("pilrgb", handler=log_and_continue),
@@ -284,16 +293,20 @@ def train(rank, gpu, args):
         )
     
     if args.dataset != "wds":
-        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                        num_replicas=args.world_size,
-                                                                        rank=rank)
-        data_loader = torch.utils.data.DataLoader(dataset,
-                                                   batch_size=batch_size,
-                                               shuffle=False,
-                                               num_workers=4,
-                                               drop_last=True,
-                                               pin_memory=True,
-                                               sampler=train_sampler,)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=args.world_size,
+            rank=rank
+        )
+        data_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4,
+            drop_last=True,
+            pin_memory=True,
+            sampler=train_sampler,
+        )
     text_encoder = t5.T5Encoder(name=args.text_encoder, masked_mean=args.masked_mean).to(device)
     args.cond_size = text_encoder.output_size
     netG = NCSNpp(args).to(device)
@@ -302,18 +315,30 @@ def train(rank, gpu, args):
         nb_params += param.flatten().shape[0]
     print("Number of generator parameters:", nb_params)
     
-
-    if args.dataset == 'cifar10' or args.dataset == 'stackmnist':    
+    if args.discr_type == "small":    
         netD = Discriminator_small(nc = 2*args.num_channels, ngf = args.ngf,
                                t_emb_dim = args.t_emb_dim,
                                cond_size=text_encoder.output_size,
                                act=nn.LeakyReLU(0.2)).to(device)
-    else:
+    elif args.discr_type == "small_cond_attn":    
+        netD = SmallCondAttnDiscriminator(nc = 2*args.num_channels, ngf = args.ngf,
+                               t_emb_dim = args.t_emb_dim,
+                               cond_size=text_encoder.output_size,
+                               act=nn.LeakyReLU(0.2)).to(device)
+
+    elif args.discr_type == "large":
         netD = Discriminator_large(nc = 2*args.num_channels, ngf = args.ngf, 
-                                   t_emb_dim = args.t_emb_dim,
+                                t_emb_dim = args.t_emb_dim,
                                 cond_size=text_encoder.output_size,
-                                   act=nn.LeakyReLU(0.2)).to(device)
-    
+                                act=nn.LeakyReLU(0.2)).to(device)
+    elif args.discr_type == "large_cond_attn":
+        netD = CondAttnDiscriminator(
+            nc = 2*args.num_channels, 
+            ngf = args.ngf, 
+            t_emb_dim = args.t_emb_dim,
+            cond_size=text_encoder.output_size,
+            act=nn.LeakyReLU(0.2)).to(device)
+
     broadcast_params(netG.parameters())
     broadcast_params(netD.parameters())
     
@@ -326,13 +351,9 @@ def train(rank, gpu, args):
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerG, args.num_epoch, eta_min=1e-5)
     schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
     
-    
-    
-    #ddp
     netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
-    
     exp = args.exp
     parent_dir = "./saved_info/dd_gan/{}".format(args.dataset)
 
@@ -342,7 +363,6 @@ def train(rank, gpu, args):
             os.makedirs(exp_path)
             copy_source(__file__, exp_path)
             shutil.copytree('score_sde/models', os.path.join(exp_path, 'score_sde/models'))
-    
     
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -368,7 +388,6 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
     
-    
     for epoch in range(init_epoch, args.num_epoch+1):
         if args.dataset == "wds":
             os.environ["WDS_EPOCH"] = str(epoch)
@@ -388,7 +407,6 @@ def train(rank, gpu, args):
 
             for p in netD.parameters():  
                 p.requires_grad = True  
-        
             
             netD.zero_grad()
             
@@ -401,9 +419,10 @@ def train(rank, gpu, args):
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
             x_t.requires_grad = True
             
-    
+            cond_for_discr = (cond_pooled, cond, cond_mask) if args.discr_type in ("large_cond_attn", "small_cond_attn") else cond_pooled
+
             # train with real
-            D_real = netD(x_t, t, x_tp1.detach(), cond=cond_pooled).view(-1)
+            D_real = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
             
             errD_real = F.softplus(-D_real)
             errD_real = errD_real.mean()
@@ -442,7 +461,7 @@ def train(rank, gpu, args):
             x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
-            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_pooled).view(-1)
+            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
                 
             
             errD_fake = F.softplus(output)
@@ -474,7 +493,7 @@ def train(rank, gpu, args):
             x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
-            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_pooled).view(-1)
+            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
                
             
             errG = F.softplus(-output)
@@ -658,7 +677,9 @@ if __name__ == '__main__':
     parser.add_argument('--save_content', action='store_true',default=False)
     parser.add_argument('--save_content_every', type=int, default=50, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
-   
+    parser.add_argument('--discr_type', type=str, default="large")
+    parser.add_argument('--preprocessing', type=str, default="resize")
+
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,
                         help='The number of nodes in multi node env.')
@@ -671,30 +692,9 @@ if __name__ == '__main__':
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
 
-   
     args = parser.parse_args()
     # args.world_size = args.num_proc_node * args.num_process_per_node
     args.world_size =  int(os.getenv("SLURM_NTASKS"))
     args.rank = int(os.environ['SLURM_PROCID'])
     # size = args.num_process_per_node
     init_processes(args.rank, args.world_size, train, args)
-    # if size > 1:
-        # processes = []
-        # for rank in range(size):
-            # args.local_rank = rank
-            # global_rank = rank + args.node_rank * args.num_process_per_node
-            # global_size = args.num_proc_node * args.num_process_per_node
-            # args.global_rank = global_rank
-            # print('Node rank %d, local proc %d, global proc %d' % (args.node_rank, rank, global_rank))
-            # p = Process(target=init_processes, args=(global_rank, global_size, train, args))
-            # p.start()
-            # processes.append(p)
-            
-        # for p in processes:
-            # p.join()
-    # else:
-        # print('starting in debug mode')
-        
-        # init_processes(0, size, train, args)
-   
-                

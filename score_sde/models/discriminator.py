@@ -167,6 +167,87 @@ class Discriminator_small(nn.Module):
     
     return out
 
+class SmallCondAttnDiscriminator(nn.Module):
+  """A time-dependent discriminator for small images (CIFAR10, StackMNIST)."""
+
+  def __init__(self, nc = 3, ngf = 64, t_emb_dim = 128, act=nn.LeakyReLU(0.2), cond_size=768):
+    super().__init__()
+    # Gaussian random feature embedding layer for time
+    self.act = act
+    self.cond_attn = layers.CondAttnBlock(ngf*8, cond_size, dim_head=64, heads=8, norm_context=False, cosine_sim_attn=False)
+    
+    self.t_embed = TimestepEmbedding(
+        embedding_dim=t_emb_dim,
+        hidden_dim=t_emb_dim,
+        output_dim=t_emb_dim,
+        act=act,
+        )
+    
+    
+     
+    # Encoding layers where the resolution decreases
+    self.start_conv = conv2d(nc,ngf*2,1, padding=0)
+    self.conv1 = DownConvBlock(ngf*2, ngf*2, t_emb_dim = t_emb_dim,act=act)
+    
+    self.conv2 = DownConvBlock(ngf*2, ngf*4,  t_emb_dim = t_emb_dim, downsample=True,act=act)
+    
+    
+    self.conv3 = DownConvBlock(ngf*4, ngf*8,  t_emb_dim = t_emb_dim, downsample=True,act=act)
+
+    
+    self.conv4 = DownConvBlock(ngf*8, ngf*8, t_emb_dim = t_emb_dim, downsample=True,act=act)
+    
+    
+    self.final_conv = conv2d(ngf*8 + 1, ngf*8, 3,padding=1, init_scale=0.)
+    self.end_linear = dense(ngf*8, 1)
+    self.end_linear_cond = dense(ngf*8, 1)
+    #self.gn_cond = nn.GroupNorm(num_groups=32, num_channels=ngf*8, eps=1e-6)
+
+    self.stddev_group = 4
+    self.stddev_feat = 1
+    
+        
+  def forward(self, x, t, x_t, cond=None):
+    t_embed = self.t_embed(t)
+    # if cond is not None:
+        # t_embed = t_embed + self.cond_proj(cond)
+    t_embed = self.act(t_embed)  
+    input_x = torch.cat((x, x_t), dim = 1)
+    
+    h0 = self.start_conv(input_x)
+    h1 = self.conv1(h0,t_embed)    
+    
+    h2 = self.conv2(h1,t_embed)   
+   
+    h3 = self.conv3(h2,t_embed)
+   
+    
+    out = self.conv4(h3,t_embed)
+    
+    batch, channel, height, width = out.shape
+    group = min(batch, self.stddev_group)
+    stddev = out.view(
+            group, -1, self.stddev_feat, channel // self.stddev_feat, height, width
+        )
+    stddev = torch.sqrt(stddev.var(0, unbiased=False) + 1e-8)
+    stddev = stddev.mean([2, 3, 4], keepdims=True).squeeze(2)
+    stddev = stddev.repeat(group, 1, height, width)
+    out = torch.cat([out, stddev], 1)
+    
+    out = self.final_conv(out)
+    out = self.act(out)
+    
+    cond_pooled, cond, cond_mask = cond
+
+    out_cond = (self.cond_attn(out, cond, cond_mask))
+
+    out = out.view(out.shape[0], out.shape[1], -1).mean(2)
+    out_cond = out_cond.view(out_cond.shape[0], out_cond.shape[1], -1).mean(2)
+    out = self.end_linear(out) + self.end_linear_cond(out_cond)
+    return out
+
+
+
 
 class Discriminator_large(nn.Module):
   """A time-dependent discriminator for large images (CelebA, LSUN)."""
@@ -239,3 +320,81 @@ class Discriminator_large(nn.Module):
     out = self.end_linear(out) + (self.cond_proj(cond) * out).sum(dim=1, keepdim=True)
     return out
 
+
+class CondAttnDiscriminator(nn.Module):
+  """A time-dependent discriminator for large images (CelebA, LSUN)."""
+
+  def __init__(self, nc = 1, ngf = 32, t_emb_dim = 128, act=nn.LeakyReLU(0.2), cond_size=768):
+    super().__init__()
+    # Gaussian random feature embedding layer for time
+    self.act = act
+    self.cond_attn = layers.CondAttnBlock(ngf*8, cond_size, dim_head=64, heads=8, norm_context=False, cosine_sim_attn=False)
+    
+    self.t_embed = TimestepEmbedding(
+            embedding_dim=t_emb_dim,
+            hidden_dim=t_emb_dim,
+            output_dim=t_emb_dim,
+            act=act,
+        )
+      
+    self.start_conv = conv2d(nc,ngf*2,1, padding=0)
+    self.conv1 = DownConvBlock(ngf*2, ngf*4, t_emb_dim = t_emb_dim, downsample = True, act=act)
+    
+    self.conv2 = DownConvBlock(ngf*4, ngf*8,  t_emb_dim = t_emb_dim, downsample=True,act=act)
+
+    self.conv3 = DownConvBlock(ngf*8, ngf*8,  t_emb_dim = t_emb_dim, downsample=True,act=act)
+    
+    
+    self.conv4 = DownConvBlock(ngf*8, ngf*8, t_emb_dim = t_emb_dim, downsample=True,act=act)
+    self.conv5 = DownConvBlock(ngf*8, ngf*8, t_emb_dim = t_emb_dim, downsample=True,act=act)
+    self.conv6 = DownConvBlock(ngf*8, ngf*8, t_emb_dim = t_emb_dim, downsample=True,act=act)
+
+  
+    self.final_conv = conv2d(ngf*8 + 1, ngf*8, 3,padding=1)
+    self.end_linear = dense(ngf*8, 1)
+    self.end_linear_cond = dense(ngf*8, 1)
+    
+    self.stddev_group = 4
+    self.stddev_feat = 1
+    
+        
+  def forward(self, x, t, x_t, cond=None):
+    cond_pooled, cond, cond_mask = cond
+
+    t_embed = self.t_embed(t)
+    t_embed = self.act(t_embed)  
+    
+    input_x = torch.cat((x, x_t), dim = 1)
+    
+    h = self.start_conv(input_x)
+    h = self.conv1(h,t_embed)    
+   
+    h = self.conv2(h,t_embed)
+   
+    h = self.conv3(h,t_embed)
+    h = self.conv4(h,t_embed)
+    h = self.conv5(h,t_embed)
+   
+    
+    out = self.conv6(h,t_embed)
+    
+    batch, channel, height, width = out.shape
+    group = min(batch, self.stddev_group)
+    stddev = out.view(
+            group, -1, self.stddev_feat, channel // self.stddev_feat, height, width
+        )
+    stddev = torch.sqrt(stddev.var(0, unbiased=False) + 1e-8)
+    stddev = stddev.mean([2, 3, 4], keepdims=True).squeeze(2)
+    stddev = stddev.repeat(group, 1, height, width)
+    out = torch.cat([out, stddev], 1)
+    
+    out = self.final_conv(out)
+    out = self.act(out)
+
+    out_cond = self.cond_attn(out, cond, cond_mask)
+
+
+    out = out.view(out.shape[0], out.shape[1], -1).mean(2)
+    out_cond = out_cond.view(out_cond.shape[0], out_cond.shape[1], -1).mean(2)
+    out = self.end_linear(out) + self.end_linear_cond(out_cond)
+    return out

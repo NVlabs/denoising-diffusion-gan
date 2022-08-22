@@ -130,14 +130,18 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, cond=None
 def sample_from_model_classifier_free_guidance(coefficients, generator, n_time, x_init, T, opt, text_encoder, cond=None, guidance_scale=0):
     x = x_init
     null = text_encoder([""] * len(x_init), return_only_pooled=False)
+    latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
-          
             t_time = t
-            latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
+            
+            #latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
             
             x_0_uncond = generator(x, t_time, latent_z, cond=null)
+            
+            #latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
+            
             x_0_cond = generator(x, t_time, latent_z, cond=cond)
 
             eps_uncond = (x - torch.sqrt(coefficients.alphas_cumprod[i]) * x_0_uncond) / torch.sqrt(1 - coefficients.alphas_cumprod[i])
@@ -149,8 +153,8 @@ def sample_from_model_classifier_free_guidance(coefficients, generator, n_time, 
            
 
             # Dynamic thresholding
-            q = args.dynamic_thresholding_percentile
-            print("Before", x_0.min(), x_0.max())
+            q = args.dynamic_thresholding_quantile
+            #print("Before", x_0.min(), x_0.max())
             if q:
                 shape = x_0.shape
                 x_0_v = x_0.view(shape[0], -1)
@@ -158,7 +162,7 @@ def sample_from_model_classifier_free_guidance(coefficients, generator, n_time, 
                 d.clamp_(min=1)
                 x_0_v = x_0_v.clamp(-d, d) / d
                 x_0 = x_0_v.view(shape)
-            print("After", x_0.min(), x_0.max())
+            #print("After", x_0.min(), x_0.max())
             
             x_new = sample_posterior(coefficients, x_0, x, t)
             
@@ -197,112 +201,138 @@ def sample_and_test(args):
 
     
     netG = NCSNpp(args).to(device)
-    ckpt = torch.load('./saved_info/dd_gan/{}/{}/netG_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    
-    #loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
-    netG.load_state_dict(ckpt)
-    netG.eval()
-    
-    
-    T = get_time_schedule(args, device)
-    
-    pos_coeff = Posterior_Coefficients(args, device)
-        
-    
-    save_dir = "./generated_samples/{}".format(args.dataset)
-    
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    if args.compute_fid:
-        from torch.nn.functional import adaptive_avg_pool2d
-        from pytorch_fid.fid_score import calculate_activation_statistics, calculate_fid_given_paths, ImagePathDataset, compute_statistics_of_path, calculate_frechet_distance
-        from pytorch_fid.inception import InceptionV3
 
-        texts = open(args.cond_text).readlines()
-        #iters_needed = len(texts) // args.batch_size
-        #texts = list(map(lambda s:s.strip(), texts))
-        #ntimes = max(30000 // len(texts), 1)
-        #texts = texts * ntimes
-        print("Text size:", len(texts))
-        #print("Iters:", iters_needed)
-        i = 0
-        dims = 2048
-        block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
-        inceptionv3 = InceptionV3([block_idx]).to(device)
 
-        if not args.real_img_dir.endswith("npz"):
-            real_mu, real_sigma = compute_statistics_of_path(
-                args.real_img_dir, inceptionv3, args.batch_size, dims, device, 
-                resize=args.image_size,
-            )
-            np.savez("inception_statistics.npz", mu=real_mu, sigma=real_sigma)
-        else:
-            stats = np.load(args.real_img_dir)
-            real_mu = stats['mu']
-            real_sigma = stats['sigma']
-
-        fake_features = []
-        for b in range(0, len(texts), args.batch_size):
-            text = texts[b:b+args.batch_size]
-            with torch.no_grad():
-                cond = text_encoder(text, return_only_pooled=False)
-                bs = len(text)
-                t0 = time.time()
-                x_t_1 = torch.randn(bs, args.num_channels,args.image_size, args.image_size).to(device)
-                if args.guidance_scale:
-                    fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
-                else:
-                    fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, cond=cond)
-                fake_sample = to_range_0_1(fake_sample)
-                """
-                for j, x in enumerate(fake_sample):
-                    index = i * args.batch_size + j 
-                    torchvision.utils.save_image(x, './generated_samples/{}/{}.jpg'.format(args.dataset, index))
-                """
-                with torch.no_grad():
-                    pred = inceptionv3(fake_sample)[0]
-                # If model output is not scalar, apply global spatial average pooling.
-                # This happens if you choose a dimensionality not equal 2048.
-                if pred.size(2) != 1 or pred.size(3) != 1:
-                    pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
-                pred = pred.squeeze(3).squeeze(2).cpu().numpy()
-                fake_features.append(pred)
-                if i % 10 == 0:
-                    print('generating batch ', i, time.time() - t0)
-                """
-                if i % 10 == 0:
-                    ff = np.concatenate(fake_features)
-                    fake_mu = np.mean(ff, axis=0)
-                    fake_sigma = np.cov(ff, rowvar=False)
-                    fid =  calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
-                    print("FID", fid)
-                """
-            i += 1
-
-        fake_features = np.concatenate(fake_features)
-        fake_mu = np.mean(fake_features, axis=0)
-        fake_sigma = np.cov(fake_features, rowvar=False)
-        fid =  calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
-        dest = './saved_info/dd_gan/{}/{}/fid_{}.json'.format(args.dataset, args.exp, args.epoch_id)
-        results = {
-            "fid": fid,
-        }
-        results.update(vars(args))
-        with open(dest, "w") as fd:
-            json.dump(results, fd)
-        print('FID = {}'.format(fid))
+    if args.epoch_id == -1:
+        epochs = range(1000)
     else:
-        cond = text_encoder([args.cond_text] * args.batch_size, return_only_pooled=False)
-        x_t_1 = torch.randn(args.batch_size, args.num_channels,args.image_size, args.image_size).to(device)
-        if args.guidance_scale:
-            fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
+        epochs = [args.epoch_id]
+    
+    for epoch in epochs:
+        args.epoch_id = epoch
+        path = './saved_info/dd_gan/{}/{}/netG_{}.pth'.format(args.dataset, args.exp, args.epoch_id)
+        if not os.path.exists(path):
+            continue
+        ckpt = torch.load(path, map_location=device)
+        dest = './saved_info/dd_gan/{}/{}/fid_{}.json'.format(args.dataset, args.exp, args.epoch_id)
+
+        if args.compute_fid and os.path.exists(dest):
+            continue
+        print("Eval Epoch", args.epoch_id)
+        #loading weights from ddp in single gpu
+        for key in list(ckpt.keys()):
+            ckpt[key[7:]] = ckpt.pop(key)
+        netG.load_state_dict(ckpt)
+        netG.eval()
+        
+        
+        T = get_time_schedule(args, device)
+        
+        pos_coeff = Posterior_Coefficients(args, device)
+            
+        
+        save_dir = "./generated_samples/{}".format(args.dataset)
+        
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        if args.compute_fid:
+            from torch.nn.functional import adaptive_avg_pool2d
+            from pytorch_fid.fid_score import calculate_activation_statistics, calculate_fid_given_paths, ImagePathDataset, compute_statistics_of_path, calculate_frechet_distance
+            from pytorch_fid.inception import InceptionV3
+            import random
+            random.seed(args.seed)
+            texts = open(args.cond_text).readlines()
+            texts = [t.strip() for t in texts]
+            if args.nb_images_for_fid:
+                random.shuffle(texts)
+                texts = texts[0:args.nb_images_for_fid]
+            #iters_needed = len(texts) // args.batch_size
+            #texts = list(map(lambda s:s.strip(), texts))
+            #ntimes = max(30000 // len(texts), 1)
+            #texts = texts * ntimes
+            print("Text size:", len(texts))
+            #print("Iters:", iters_needed)
+            i = 0
+            dims = 2048
+            block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
+            inceptionv3 = InceptionV3([block_idx]).to(device)
+
+            if not args.real_img_dir.endswith("npz"):
+                real_mu, real_sigma = compute_statistics_of_path(
+                    args.real_img_dir, inceptionv3, args.batch_size, dims, device, 
+                    resize=args.image_size,
+                )
+                np.savez("inception_statistics.npz", mu=real_mu, sigma=real_sigma)
+            else:
+                stats = np.load(args.real_img_dir)
+                real_mu = stats['mu']
+                real_sigma = stats['sigma']
+
+            fake_features = []
+            for b in range(0, len(texts), args.batch_size):
+                text = texts[b:b+args.batch_size]
+                with torch.no_grad():
+                    cond = text_encoder(text, return_only_pooled=False)
+                    bs = len(text)
+                    t0 = time.time()
+                    x_t_1 = torch.randn(bs, args.num_channels,args.image_size, args.image_size).to(device)
+                    if args.guidance_scale:
+                        fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
+                    else:
+                        fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, cond=cond)
+                    fake_sample = to_range_0_1(fake_sample)
+                    """
+                    for j, x in enumerate(fake_sample):
+                        index = i * args.batch_size + j 
+                        torchvision.utils.save_image(x, './generated_samples/{}/{}.jpg'.format(args.dataset, index))
+                    """
+                    with torch.no_grad():
+                        pred = inceptionv3(fake_sample)[0]
+                    # If model output is not scalar, apply global spatial average pooling.
+                    # This happens if you choose a dimensionality not equal 2048.
+                    if pred.size(2) != 1 or pred.size(3) != 1:
+                        pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
+                    pred = pred.squeeze(3).squeeze(2).cpu().numpy()
+                    fake_features.append(pred)
+                    if i % 10 == 0:
+                        print('generating batch ', i, time.time() - t0)
+                    """
+                    if i % 10 == 0:
+                        ff = np.concatenate(fake_features)
+                        fake_mu = np.mean(ff, axis=0)
+                        fake_sigma = np.cov(ff, rowvar=False)
+                        fid =  calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
+                        print("FID", fid)
+                    """
+                i += 1
+
+            fake_features = np.concatenate(fake_features)
+            fake_mu = np.mean(fake_features, axis=0)
+            fake_sigma = np.cov(fake_features, rowvar=False)
+            fid =  calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
+            dest = './saved_info/dd_gan/{}/{}/fid_{}.json'.format(args.dataset, args.exp, args.epoch_id)
+            results = {
+                "fid": fid,
+            }
+            results.update(vars(args))
+            with open(dest, "w") as fd:
+                json.dump(results, fd)
+            print('FID = {}'.format(fid))
         else:
-            fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, cond=cond)
-        fake_sample = to_range_0_1(fake_sample)
-        torchvision.utils.save_image(fake_sample, './samples_{}.jpg'.format(args.dataset))
+            if args.cond_text.endswith(".txt"):
+                texts = open(args.cond_text).readlines()
+                texts = [t.strip() for t in texts]
+            else:
+                texts = [args.cond_text] * args.batch_size
+            cond = text_encoder(texts, return_only_pooled=False)
+            x_t_1 = torch.randn(len(texts), args.num_channels,args.image_size, args.image_size).to(device)
+            if args.guidance_scale:
+                fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
+            else:
+                fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, cond=cond)
+            fake_sample = to_range_0_1(fake_sample)
+            torchvision.utils.save_image(fake_sample, './samples_{}.jpg'.format(args.dataset))
 
     
     
@@ -316,7 +346,7 @@ if __name__ == '__main__':
                             help='whether or not compute FID')
     parser.add_argument('--epoch_id', type=int,default=1000)
     parser.add_argument('--guidance_scale', type=float,default=0)
-    parser.add_argument('--dynamic_thresholding_percentile', type=float,default=0)
+    parser.add_argument('--dynamic_thresholding_quantile', type=float,default=0)
     parser.add_argument('--cond_text', type=str,default="0")
 
     parser.add_argument('--cross_attention', action='store_true',default=False)
@@ -388,6 +418,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
     parser.add_argument('--text_encoder', type=str, default="google/t5-v1_1-base")
     parser.add_argument('--masked_mean', action='store_true',default=False)
+    parser.add_argument('--nb_images_for_fid', type=int, default=0)
         
 
 

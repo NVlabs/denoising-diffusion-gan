@@ -91,6 +91,11 @@ def ddgan_cc12m_v14():
     cfg['model']['num_channels_dae'] = 192
     return cfg
 
+def ddgan_cc12m_v15():
+    cfg = ddgan_cc12m_v11()
+    cfg['model']['mismatch_loss'] = ''
+    cfg['model']['grad_penalty_cond'] = ''
+    return cfg
 
 def ddgan_cifar10_cond17():
     cfg = base()
@@ -105,6 +110,13 @@ def ddgan_cifar10_cond17():
 def ddgan_cifar10_cond18():
     cfg = ddgan_cifar10_cond17()
     cfg['model']['text_encoder'] = "google/t5-v1_1-xl"    
+    return cfg
+
+def ddgan_cifar10_cond19():
+    cfg = ddgan_cifar10_cond17()
+    cfg['model']['discr_type'] = 'small_cond_attn'
+    cfg['model']['mismatch_loss'] = ''
+    cfg['model']['grad_penalty_cond'] = ''
     return cfg
 
 def ddgan_laion_aesthetic_v1():
@@ -122,10 +134,23 @@ def ddgan_laion_aesthetic_v3():
     cfg['model']['text_encoder'] = "google/t5-v1_1-xl" 
     return cfg
 
+def ddgan_laion_aesthetic_v4():
+    cfg = ddgan_laion_aesthetic_v1()
+    cfg['model']['text_encoder'] = "openclip/ViT-L-14-336/openai" 
+    return cfg
+
+
+def ddgan_laion_aesthetic_v5():
+    cfg = ddgan_laion_aesthetic_v1()
+    cfg['model']['mismatch_loss'] = ''
+    cfg['model']['grad_penalty_cond'] = ''
+    return cfg
 
 models = [
     ddgan_cifar10_cond17, # cifar10, cross attn for discr
     ddgan_cifar10_cond18, # cifar10, xl encoder
+    ddgan_cifar10_cond19, # cifar10, xl encoder
+
     ddgan_cc12m_v2, # baseline (no large text encoder, no classifier guidance)
     ddgan_cc12m_v6, # like v2 but using large T5 text encoder
     ddgan_cc12m_v7, # like v2 but with classifier guidance
@@ -135,9 +160,12 @@ models = [
     ddgan_cc12m_v12, # T5-XL + cross attention + classifier free guidance + random_resized_crop_v1
     ddgan_cc12m_v13, # T5-XL + cross attention + classifier free guidance + random_resized_crop_v1 + cond attn
     ddgan_cc12m_v14, # T5-XL + cross attention + classifier free guidance + random_resized_crop_v1 + 300M model
+    ddgan_cc12m_v15, # fine-tune v11 with --mismatch_loss and --grad_penalty_cond
     ddgan_laion_aesthetic_v1, # like ddgan_cc12m_v11 but fine-tuned on laion aesthetic
     ddgan_laion_aesthetic_v2, # like ddgan_laion_aesthetic_v1 but trained from scratch with the new cross attn discr
-    ddgan_laion_aesthetic_v3, # like ddgan_laion_aesthetic_v1 but trained from scratch with T5-XL
+    ddgan_laion_aesthetic_v3, # like ddgan_laion_aesthetic_v1 but trained from scratch with T5-XL (continue from 23aug with mismatch and grad penalty and random_resized_crop_v1)
+    ddgan_laion_aesthetic_v4, # like ddgan_laion_aesthetic_v1 but trained from scratch with OpenAI's ClipEncoder 
+    ddgan_laion_aesthetic_v5, # fine-tune ddgan_laion_aesthetic_v1 with mismatch and cond grad penalty  losses
 ]
 
 def get_model(model_name):
@@ -146,7 +174,7 @@ def get_model(model_name):
             return model()
 
 
-def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guidance_scale:float=0, fid=False, real_img_dir="", q=0.0, seed=0, nb_images_for_fid=0):
+def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guidance_scale:float=0, fid=False, real_img_dir="", q=0.0, seed=0, nb_images_for_fid=0, scale_factor_h=1, scale_factor_w=1, compute_clip_score=False):
 
     cfg = get_model(model_name)
     model = cfg['model']
@@ -173,12 +201,16 @@ def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guida
     args['guidance_scale'] = guidance_scale
     args['masked_mean'] = model.get("masked_mean")
     args['dynamic_thresholding_quantile'] = q
+    args['scale_factor_h'] = scale_factor_h
+    args['scale_factor_w'] = scale_factor_w
     args['n_mlp'] = model.get("n_mlp")
-
     if fid:
         args['compute_fid'] = ''
         args['real_img_dir'] = real_img_dir 
         args['nb_images_for_fid'] = nb_images_for_fid
+    if compute_clip_score:
+        args['compute_clip_score'] = ""
+
     cmd = "python -u test_ddgan.py " + " ".join(f"--{k} {v}" for k, v in args.items() if v is not None)
     print(cmd)
     call(cmd, shell=True)

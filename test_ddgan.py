@@ -12,7 +12,7 @@ import os
 import json
 import torchvision
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp
-import t5
+from encoder import build_encoder
 
 #%% Diffusion coefficients 
 def var_func_vp(t, beta_min, beta_max):
@@ -130,13 +130,13 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, cond=None
 def sample_from_model_classifier_free_guidance(coefficients, generator, n_time, x_init, T, opt, text_encoder, cond=None, guidance_scale=0):
     x = x_init
     null = text_encoder([""] * len(x_init), return_only_pooled=False)
-    latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
+    #latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
             t_time = t
             
-            #latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
+            latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
             
             x_0_uncond = generator(x, t_time, latent_z, cond=null)
             
@@ -184,10 +184,8 @@ def sample_from_model_classifier_free_guidance(coefficients, generator, n_time, 
 def sample_and_test(args):
     torch.manual_seed(args.seed)
     device = 'cuda:0'
-    text_encoder = t5.T5Encoder(name=args.text_encoder, masked_mean=args.masked_mean).to(device)
+    text_encoder  =build_encoder(name=args.text_encoder, masked_mean=args.masked_mean).to(device)
     args.cond_size = text_encoder.output_size
-    # cond = text_encoder([str(yi%10) for yi in range(args.batch_size)])
-
     if args.dataset == 'cifar10':
         real_img_dir = 'pytorch_fid/cifar10_train_stat.npy'
     elif args.dataset == 'celeba_256':
@@ -201,7 +199,7 @@ def sample_and_test(args):
 
     
     netG = NCSNpp(args).to(device)
-
+    netG.attn_resolutions = [r * args.scale_factor_w for r in netG.attn_resolutions]
 
     if args.epoch_id == -1:
         epochs = range(1000)
@@ -214,7 +212,7 @@ def sample_and_test(args):
         if not os.path.exists(path):
             continue
         ckpt = torch.load(path, map_location=device)
-        dest = './saved_info/dd_gan/{}/{}/fid_{}.json'.format(args.dataset, args.exp, args.epoch_id)
+        dest = './saved_info/dd_gan/{}/{}/eval_{}.json'.format(args.dataset, args.exp, args.epoch_id)
 
         if args.compute_fid and os.path.exists(dest):
             continue
@@ -258,6 +256,15 @@ def sample_and_test(args):
             block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
             inceptionv3 = InceptionV3([block_idx]).to(device)
 
+            if args.compute_clip_score:
+                import clip
+                CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]
+                CLIP_STD = [0.26862954, 0.26130258, 0.27577711]
+                clip_model, preprocess = clip.load(args.clip_model, device)
+                clip_mean = torch.Tensor(CLIP_MEAN).view(1,-1,1,1).to(device)
+                clip_std = torch.Tensor(CLIP_STD).view(1,-1,1,1).to(device)
+
+
             if not args.real_img_dir.endswith("npz"):
                 real_mu, real_sigma = compute_statistics_of_path(
                     args.real_img_dir, inceptionv3, args.batch_size, dims, device, 
@@ -270,6 +277,9 @@ def sample_and_test(args):
                 real_sigma = stats['sigma']
 
             fake_features = []
+            if args.compute_clip_score:
+                clip_scores = []
+            
             for b in range(0, len(texts), args.batch_size):
                 text = texts[b:b+args.batch_size]
                 with torch.no_grad():
@@ -277,6 +287,7 @@ def sample_and_test(args):
                     bs = len(text)
                     t0 = time.time()
                     x_t_1 = torch.randn(bs, args.num_channels,args.image_size, args.image_size).to(device)
+                    #print(x_t_1.shape)
                     if args.guidance_scale:
                         fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
                     else:
@@ -295,6 +306,17 @@ def sample_and_test(args):
                         pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
                     pred = pred.squeeze(3).squeeze(2).cpu().numpy()
                     fake_features.append(pred)
+
+                    if args.compute_clip_score:
+                        with torch.no_grad():
+                            clip_ims = torch.nn.functional.interpolate(fake_sample, (224, 224), mode="bicubic")
+                            clip_txt = clip.tokenize(text).to(device)
+                            imf = clip_model.encode_image(clip_ims)
+                            txtf = clip_model.encode_text(clip_txt)
+                            imf = torch.nn.functional.normalize(imf, dim=1)
+                            txtf = torch.nn.functional.normalize(txtf, dim=1)
+                            clip_scores.append(((imf * txtf).sum(dim=1)).cpu())
+                    break
                     if i % 10 == 0:
                         print('generating batch ', i, time.time() - t0)
                     """
@@ -311,14 +333,17 @@ def sample_and_test(args):
             fake_mu = np.mean(fake_features, axis=0)
             fake_sigma = np.cov(fake_features, rowvar=False)
             fid =  calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
-            dest = './saved_info/dd_gan/{}/{}/fid_{}.json'.format(args.dataset, args.exp, args.epoch_id)
+            dest = './saved_info/dd_gan/{}/{}/eval_{}.json'.format(args.dataset, args.exp, args.epoch_id)
             results = {
                 "fid": fid,
             }
+            if args.compute_clip_score:
+                clip_score = torch.cat(clip_scores).mean().item()
+                results['clip_score'] = clip_score
             results.update(vars(args))
             with open(dest, "w") as fd:
                 json.dump(results, fd)
-            print('FID = {}'.format(fid))
+            print(results)
         else:
             if args.cond_text.endswith(".txt"):
                 texts = open(args.cond_text).readlines()
@@ -326,11 +351,13 @@ def sample_and_test(args):
             else:
                 texts = [args.cond_text] * args.batch_size
             cond = text_encoder(texts, return_only_pooled=False)
-            x_t_1 = torch.randn(len(texts), args.num_channels,args.image_size, args.image_size).to(device)
+            x_t_1 = torch.randn(len(texts), args.num_channels,args.image_size*args.scale_factor_h, args.image_size*args.scale_factor_w).to(device)
+            t0 = time.time()
             if args.guidance_scale:
                 fake_sample = sample_from_model_classifier_free_guidance(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, text_encoder, cond=cond, guidance_scale=args.guidance_scale)
             else:
                 fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args, cond=cond)
+            print(time.time() - t0)
             fake_sample = to_range_0_1(fake_sample)
             torchvision.utils.save_image(fake_sample, './samples_{}.jpg'.format(args.dataset))
 
@@ -344,11 +371,16 @@ if __name__ == '__main__':
                         help='seed used for initialization')
     parser.add_argument('--compute_fid', action='store_true', default=False,
                             help='whether or not compute FID')
+    parser.add_argument('--compute_clip_score', action='store_true', default=False,
+                            help='whether or not compute CLIP score')
+    parser.add_argument('--clip_model', type=str,default="ViT-L/14")
+
     parser.add_argument('--epoch_id', type=int,default=1000)
     parser.add_argument('--guidance_scale', type=float,default=0)
     parser.add_argument('--dynamic_thresholding_quantile', type=float,default=0)
     parser.add_argument('--cond_text', type=str,default="0")
-
+    parser.add_argument('--scale_factor_h', type=int,default=1)
+    parser.add_argument('--scale_factor_w', type=int,default=1)
     parser.add_argument('--cross_attention', action='store_true',default=False)
 
     
@@ -419,7 +451,7 @@ if __name__ == '__main__':
     parser.add_argument('--text_encoder', type=str, default="google/t5-v1_1-base")
     parser.add_argument('--masked_mean', action='store_true',default=False)
     parser.add_argument('--nb_images_for_fid', type=int, default=0)
-        
+
 
 
 

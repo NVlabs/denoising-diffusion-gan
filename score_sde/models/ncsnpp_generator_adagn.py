@@ -325,9 +325,12 @@ class NCSNpp(nn.Module):
 
     hs = [modules[m_idx](x)]
     m_idx += 1
+    #print(self.attn_resolutions)
+    #self.attn_resolutions = (32,)
     for i_level in range(self.num_resolutions):
       # Residual blocks for this resolution
       for i_block in range(self.num_res_blocks):
+        #print(hs[-1].shape, temb.shape, zemb.shape, type(modules[m_idx]))
         h = modules[m_idx](hs[-1], temb, zemb)
         m_idx += 1
         if h.shape[-1] in self.attn_resolutions:

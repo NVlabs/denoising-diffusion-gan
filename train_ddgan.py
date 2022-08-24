@@ -28,7 +28,10 @@ from torch.multiprocessing import Process
 import torch.distributed as dist
 import shutil
 import logging
-import t5
+from encoder import build_encoder
+from utils import ResampledShards2
+
+
 def log_and_continue(exn):
     logging.warning(f'Handling webdataset error ({repr(exn)}). Ignoring.')
     return True
@@ -192,7 +195,11 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, cond=None
     return x
 
 
-from utils import ResampledShards2
+
+def filter_no_caption(sample):
+    return 'txt' in sample
+
+
 
 def train(rank, gpu, args):
     from score_sde.models.discriminator import Discriminator_small, Discriminator_large, CondAttnDiscriminator, SmallCondAttnDiscriminator
@@ -278,6 +285,7 @@ def train(rank, gpu, args):
             ),
         ])
         pipeline.extend([
+            wds.select(filter_no_caption),
             wds.decode("pilrgb", handler=log_and_continue),
             wds.rename(image="jpg;png"),
             wds.map_dict(image=train_transform),
@@ -307,7 +315,7 @@ def train(rank, gpu, args):
             pin_memory=True,
             sampler=train_sampler,
         )
-    text_encoder = t5.T5Encoder(name=args.text_encoder, masked_mean=args.masked_mean).to(device)
+    text_encoder = build_encoder(name=args.text_encoder, masked_mean=args.masked_mean).to(device)
     args.cond_size = text_encoder.output_size
     netG = NCSNpp(args).to(device)
     nb_params = 0
@@ -387,7 +395,7 @@ def train(rank, gpu, args):
                   .format(checkpoint['epoch']))
     else:
         global_step, epoch, init_epoch = 0, 0, 0
-    
+    use_cond_attn_discr = args.discr_type in ("large_cond_attn", "small_cond_attn")
     for epoch in range(init_epoch, args.num_epoch+1):
         if args.dataset == "wds":
             os.environ["WDS_EPOCH"] = str(epoch)
@@ -419,45 +427,71 @@ def train(rank, gpu, args):
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
             x_t.requires_grad = True
             
-            cond_for_discr = (cond_pooled, cond, cond_mask) if args.discr_type in ("large_cond_attn", "small_cond_attn") else cond_pooled
+            cond_for_discr = (cond_pooled, cond, cond_mask) if use_cond_attn_discr else cond_pooled
+            if args.grad_penalty_cond:
+                if use_cond_attn_discr:
+                    #cond_pooled.requires_grad = True
+                    cond.requires_grad = True
+                    #cond_mask.requires_grad = True
+                else:
+                    cond_for_discr.requires_grad = True
 
             # train with real
             D_real = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
             
             errD_real = F.softplus(-D_real)
             errD_real = errD_real.mean()
+
             
             errD_real.backward(retain_graph=True)
             
             
             if args.lazy_reg is None:
-                grad_real = torch.autograd.grad(
-                            outputs=D_real.sum(), inputs=x_t, create_graph=True
-                            )[0]
-                grad_penalty = (
-                                grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
-                                ).mean()
-                
-                
-                grad_penalty = args.r1_gamma / 2 * grad_penalty
-                grad_penalty.backward()
-            else:
-                if global_step % args.lazy_reg == 0:
+                if args.grad_penalty_cond:
+                    inputs = (x_t,) + (cond,) if use_cond_attn_discr else (cond_for_discr,)
                     grad_real = torch.autograd.grad(
-                            outputs=D_real.sum(), inputs=x_t, create_graph=True
-                            )[0]
-                    grad_penalty = (
-                                grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
-                                ).mean()
-                
-                
+                                outputs=D_real.sum(), inputs=inputs, create_graph=True
+                                )[0]
+                    grad_real = torch.cat([g.view(g.size(0), -1) for g in grad_real])
+                    grad_penalty = (grad_real.norm(2, dim=1) ** 2).mean()
                     grad_penalty = args.r1_gamma / 2 * grad_penalty
                     grad_penalty.backward()
+                else:
+                    grad_real = torch.autograd.grad(
+                                outputs=D_real.sum(), inputs=x_t, create_graph=True
+                                )[0]
+                    grad_penalty = (
+                                    grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+                                    ).mean()
+                    
+                    
+                    grad_penalty = args.r1_gamma / 2 * grad_penalty
+                    grad_penalty.backward()
+            else:
+                if global_step % args.lazy_reg == 0:
+                    if args.grad_penalty_cond:
+                        inputs = (x_t,) + (cond,) if use_cond_attn_discr else (cond_for_discr,)
+                        grad_real = torch.autograd.grad(
+                                    outputs=D_real.sum(), inputs=inputs, create_graph=True
+                                    )[0]
+                        grad_real = torch.cat([g.view(g.size(0), -1) for g in grad_real])
+                        grad_penalty = (grad_real.norm(2, dim=1) ** 2).mean()
+                        grad_penalty = args.r1_gamma / 2 * grad_penalty
+                        grad_penalty.backward()
+                    else:
+                        grad_real = torch.autograd.grad(
+                                outputs=D_real.sum(), inputs=x_t, create_graph=True
+                                )[0]
+                        grad_penalty = (
+                                    grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+                                    ).mean()
+                    
+                        grad_penalty = args.r1_gamma / 2 * grad_penalty
+                        grad_penalty.backward()
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
             
-         
             x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
@@ -466,6 +500,18 @@ def train(rank, gpu, args):
             
             errD_fake = F.softplus(output)
             errD_fake = errD_fake.mean()
+
+            if args.mismatch_loss:
+                # following https://github.com/tobran/DF-GAN/blob/bc38a4f795c294b09b4ef5579cd4ff78807e5b96/code/lib/modules.py,
+                # we add a discr loss for (real image, non matching text)
+                #inds = torch.flip(torch.arange(len(x_t)), dims=(0,))
+                inds = torch.cat([torch.arange(1,len(x_t)),torch.arange(1)])
+                cond_for_discr_mis =  (cond_pooled[inds], cond[inds], cond_mask[inds]) if use_cond_attn_discr else cond_pooled[inds]
+                D_real_mis = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr_mis).view(-1)
+                errD_real_mis = F.softplus(D_real_mis)
+                errD_real_mis = errD_real_mis.mean()
+                errD_fake = errD_fake * 0.5 + errD_real_mis * 0.5
+        
             errD_fake.backward()
     
             
@@ -592,6 +638,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--resume', action='store_true',default=False)
     parser.add_argument('--masked_mean', action='store_true',default=False)
+    parser.add_argument('--mismatch_loss', action='store_true',default=False)
     parser.add_argument('--text_encoder', type=str, default="google/t5-v1_1-base")
     parser.add_argument('--cross_attention', action='store_true',default=False)
 
@@ -616,7 +663,7 @@ if __name__ == '__main__':
                             help='channel multiplier')
     parser.add_argument('--num_res_blocks', type=int, default=2,
                             help='number of resnet blocks per scale')
-    parser.add_argument('--attn_resolutions', default=(16,),
+    parser.add_argument('--attn_resolutions', default=(16,), nargs='+', type=int,
                             help='resolution of applying attention')
     parser.add_argument('--dropout', type=float, default=0.,
                             help='drop-out rate')
@@ -665,12 +712,14 @@ if __name__ == '__main__':
     parser.add_argument('--beta2', type=float, default=0.9,
                             help='beta2 for adam')
     parser.add_argument('--no_lr_decay',action='store_true', default=False)
-    
+    parser.add_argument('--grad_penalty_cond', action='store_true',default=False)
+
     parser.add_argument('--use_ema', action='store_true', default=False,
                             help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
     
     parser.add_argument('--r1_gamma', type=float, default=0.05, help='coef for r1 reg')
+
     parser.add_argument('--lazy_reg', type=int, default=None,
                         help='lazy regulariation.')
 

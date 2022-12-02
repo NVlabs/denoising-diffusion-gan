@@ -13,5 +13,8 @@ source scripts/init.sh
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 echo "Job id: $SLURM_JOB_ID"
 export TOKENIZERS_PARALLELISM=false
-export NCCL_ASYNC_ERROR_HANDLING=1
+#export NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_IB_TIMEOUT=50
+export UCX_RC_TIMEOUT=4s
+export NCCL_IB_RETRY_CNT=10
 srun python -u $*

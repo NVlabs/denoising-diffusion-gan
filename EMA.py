@@ -39,7 +39,6 @@ class EMA(Optimizer):
                 # State initialization
                 if 'ema' not in state:
                     state['ema'] = p.data.clone()
-
                 if p.shape not in params:
                     params[p.shape] = {'idx': 0, 'data': []}
                     ema[p.shape] = []

@@ -5,7 +5,7 @@
 # for Denoising Diffusion GAN. To view a copy of this license, see the LICENSE file.
 # ---------------------------------------------------------------
 
-
+from glob import glob
 import argparse
 import torch
 import numpy as np
@@ -30,6 +30,7 @@ import shutil
 import logging
 from encoder import build_encoder
 from utils import ResampledShards2
+from torch.utils.tensorboard import SummaryWriter
 
 
 def log_and_continue(exn):
@@ -194,23 +195,29 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, cond=None
         
     return x
 
-
+from contextlib import suppress
 
 def filter_no_caption(sample):
     return 'txt' in sample
 
-
+def get_autocast(precision):
+    if precision == 'amp':
+        return torch.cuda.amp.autocast
+    elif precision == 'amp_bfloat16':
+        return lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
+    else:
+        return suppress 
 
 def train(rank, gpu, args):
     from score_sde.models.discriminator import Discriminator_small, Discriminator_large, CondAttnDiscriminator, SmallCondAttnDiscriminator
     from score_sde.models.ncsnpp_generator_adagn import NCSNpp
     from EMA import EMA
     
-    torch.manual_seed(args.seed + rank)
-    torch.cuda.manual_seed(args.seed + rank)
-    torch.cuda.manual_seed_all(args.seed + rank)
+    #torch.manual_seed(args.seed + rank)
+    #torch.cuda.manual_seed(args.seed + rank)
+    #torch.cuda.manual_seed_all(args.seed + rank)
     device = "cuda"
-    
+    autocast = get_autocast(args.precision)
     batch_size = args.batch_size
     
     nz = args.nz #latent dimension
@@ -270,11 +277,12 @@ def train(rank, gpu, args):
             ])
         elif args.preprocessing == "random_resized_crop_v1":
             train_transform = transforms.Compose([
-                    transforms.RandomResizedCrop(256, scale=(0.95, 1.0), interpolation=3),
+                    transforms.RandomResizedCrop(args.image_size, scale=(0.95, 1.0), interpolation=3),
                     transforms.ToTensor(),
                     transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
             ])
-        pipeline = [ResampledShards2(args.dataset_root)]
+        shards = glob(os.path.join(args.dataset_root, "*.tar")) if os.path.isdir(args.dataset_root)  else args.dataset_root
+        pipeline = [ResampledShards2(shards)]
         pipeline.extend([
             wds.split_by_node,
             wds.split_by_worker,
@@ -339,6 +347,13 @@ def train(rank, gpu, args):
                                 t_emb_dim = args.t_emb_dim,
                                 cond_size=text_encoder.output_size,
                                 act=nn.LeakyReLU(0.2)).to(device)
+    elif args.discr_type == "large_attn_pool":
+        netD = Discriminator_large(nc = 2*args.num_channels, ngf = args.ngf, 
+                                t_emb_dim = args.t_emb_dim,
+                                cond_size=text_encoder.output_size,
+                                attn_pool=True,
+                                act=nn.LeakyReLU(0.2)).to(device)
+
     elif args.discr_type == "large_cond_attn":
         netD = CondAttnDiscriminator(
             nc = 2*args.num_channels, 
@@ -350,6 +365,15 @@ def train(rank, gpu, args):
     broadcast_params(netG.parameters())
     broadcast_params(netD.parameters())
     
+    if args.fsdp:
+        from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+        from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+        netG = FSDP(
+            netG,
+            flatten_parameters=True,
+            verbose=True,
+        )
+
     optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas = (args.beta1, args.beta2))
     optimizerG = optim.Adam(netG.parameters(), lr=args.lr_g, betas = (args.beta1, args.beta2))
     
@@ -358,9 +382,16 @@ def train(rank, gpu, args):
     
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerG, args.num_epoch, eta_min=1e-5)
     schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
+
+    if args.fsdp:   
+        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    else:
+        netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
+        netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
     
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    if args.grad_checkpointing:
+        from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
+        netG = checkpoint_wrapper(netG)
 
     exp = args.exp
     parent_dir = "./saved_info/dd_gan/{}".format(args.dataset)
@@ -377,6 +408,10 @@ def train(rank, gpu, args):
     T = get_time_schedule(args, device)
     
     checkpoint_file = os.path.join(exp_path, 'content.pth')
+    
+    if rank == 0:
+        log_writer = SummaryWriter(exp_path)
+
     if args.resume and os.path.exists(checkpoint_file):
         checkpoint = torch.load(checkpoint_file, map_location="cpu")
         init_epoch = checkpoint['epoch']
@@ -395,7 +430,7 @@ def train(rank, gpu, args):
                   .format(checkpoint['epoch']))
     else:
         global_step, epoch, init_epoch = 0, 0, 0
-    use_cond_attn_discr = args.discr_type in ("large_cond_attn", "small_cond_attn")
+    use_cond_attn_discr = args.discr_type in ("large_cond_attn", "small_cond_attn", "large_attn_pool")
     for epoch in range(init_epoch, args.num_epoch+1):
         if args.dataset == "wds":
             os.environ["WDS_EPOCH"] = str(epoch)
@@ -403,6 +438,7 @@ def train(rank, gpu, args):
             train_sampler.set_epoch(epoch)
        
         for iteration, (x, y) in enumerate(data_loader):
+            #print(x.shape)
             if args.dataset != "wds":
                 y = [str(yi) for yi in y.tolist()]
             
@@ -437,15 +473,15 @@ def train(rank, gpu, args):
                     cond_for_discr.requires_grad = True
 
             # train with real
-            D_real = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
-            
-            errD_real = F.softplus(-D_real)
-            errD_real = errD_real.mean()
+            with autocast():
+                D_real = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
+                errD_real = F.softplus(-D_real)
+                errD_real = errD_real.mean()
 
             
             errD_real.backward(retain_graph=True)
             
-            
+            grad_penalty = None
             if args.lazy_reg is None:
                 if args.grad_penalty_cond:
                     inputs = (x_t,) + (cond,) if use_cond_attn_discr else (cond_for_discr,)
@@ -491,26 +527,36 @@ def train(rank, gpu, args):
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            
-            x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
-            
-            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
+            with autocast():
+                if args.grad_checkpointing:
+                    ginp  = x_tp1.detach()
+                    ginp.requires_grad = True
+                    latent_z.requires_grad = True
+                    cond_pooled.requires_grad = True
+                    cond.requires_grad = True
+                    #cond_mask.requires_grad = True
+                    x_0_predict = netG(ginp, t, latent_z, cond=(cond_pooled, cond, cond_mask))
+                else:
+                    x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
+                x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
                 
-            
-            errD_fake = F.softplus(output)
-            errD_fake = errD_fake.mean()
+                output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
+                    
+                
+                errD_fake = F.softplus(output)
+                errD_fake = errD_fake.mean()
 
             if args.mismatch_loss:
                 # following https://github.com/tobran/DF-GAN/blob/bc38a4f795c294b09b4ef5579cd4ff78807e5b96/code/lib/modules.py,
                 # we add a discr loss for (real image, non matching text)
                 #inds = torch.flip(torch.arange(len(x_t)), dims=(0,))
-                inds = torch.cat([torch.arange(1,len(x_t)),torch.arange(1)])
-                cond_for_discr_mis =  (cond_pooled[inds], cond[inds], cond_mask[inds]) if use_cond_attn_discr else cond_pooled[inds]
-                D_real_mis = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr_mis).view(-1)
-                errD_real_mis = F.softplus(D_real_mis)
-                errD_real_mis = errD_real_mis.mean()
-                errD_fake = errD_fake * 0.5 + errD_real_mis * 0.5
+                with autocast():
+                    inds = torch.cat([torch.arange(1,len(x_t)),torch.arange(1)])
+                    cond_for_discr_mis =  (cond_pooled[inds], cond[inds], cond_mask[inds]) if use_cond_attn_discr else cond_pooled[inds]
+                    D_real_mis = netD(x_t, t, x_tp1.detach(), cond=cond_for_discr_mis).view(-1)
+                    errD_real_mis = F.softplus(D_real_mis)
+                    errD_real_mis = errD_real_mis.mean()
+                    errD_fake = errD_fake * 0.5 + errD_real_mis * 0.5
         
             errD_fake.backward()
     
@@ -534,58 +580,106 @@ def train(rank, gpu, args):
             
             latent_z = torch.randn(batch_size, nz,device=device)
             
-            
+            with autocast():
+                if args.grad_checkpointing:
+                    ginp  = x_tp1.detach()
+                    ginp.requires_grad = True
+                    latent_z.requires_grad = True
+                    cond_pooled.requires_grad = True
+                    cond.requires_grad = True
+                    #cond_mask.requires_grad = True
+                    x_0_predict = netG(ginp, t, latent_z, cond=(cond_pooled, cond, cond_mask))
+                else:
+                    x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
+                x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
                 
-            x_0_predict = netG(x_tp1.detach(), t, latent_z, cond=(cond_pooled, cond, cond_mask))
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
-            
-            output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
-               
-            
-            errG = F.softplus(-output)
-            errG = errG.mean()
+                output = netD(x_pos_sample, t, x_tp1.detach(), cond=cond_for_discr).view(-1)
+                
+                
+                errG = F.softplus(-output)
+                errG = errG.mean()
             
             errG.backward()
             optimizerG.step()
                 
-           
+            if (iteration % 10 == 0) and (rank == 0):
+                log_writer.add_scalar('g_loss', errG.item(), global_step)
+                log_writer.add_scalar('d_loss', errD.item(), global_step)
+                if grad_penalty is not None:
+                    log_writer.add_scalar('grad_penalty', grad_penalty.item(), global_step)
             
             global_step += 1
+
+
             if iteration % 100 == 0:
                 if rank == 0:
                     print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(epoch,iteration, errG.item(), errD.item()))
+                    print('Global step:', global_step)
             if iteration % 1000 == 0:
                 x_t_1 = torch.randn_like(real_data)
-                fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args, cond=(cond_pooled, cond, cond_mask))
+                with autocast():
+                    fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args, cond=(cond_pooled, cond, cond_mask))
                 if rank == 0:
                     torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_discrete_epoch_{}_iteration_{}.png'.format(epoch, iteration)), normalize=True)
-                    if args.save_content:
-                        print('Saving content.')
+                
+                if args.save_content:
+                    dist.barrier()
+                    print('Saving content.')
+                    def to_cpu(d):
+                        for k, v in d.items():
+                            d[k] = v.cpu()
+                        return d
+                    
+                    if args.fsdp:
+                        netG_state_dict = to_cpu(netG.state_dict())
+                        netD_state_dict = to_cpu(netD.state_dict())
+                        #netG_optim_state_dict = (netG.gather_full_optim_state_dict(optimizerG))
+                        netG_optim_state_dict = optimizerG.state_dict()
+                        #print(netG_optim_state_dict)
+                        netD_optim_state_dict = (optimizerD.state_dict())
                         content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                                   'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
-                                   'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
-                                   'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict()}
-                        
-                        torch.save(content, os.path.join(exp_path, 'content.pth'))
-                        torch.save(content, os.path.join(exp_path, 'content_backup.pth'))
-                    if args.use_ema:
-                        optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
-                        
-                    torch.save(netG.state_dict(), os.path.join(exp_path, 'netG_{}.pth'.format(epoch)))
-                    if args.use_ema:
-                        optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
+                                'netG_dict': netG_state_dict, 'optimizerG': netG_optim_state_dict,
+                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD_state_dict,
+                                'optimizerD': netD_optim_state_dict, 'schedulerD': schedulerD.state_dict()}
+                        if rank == 0:
+                            torch.save(content, os.path.join(exp_path, 'content.pth'))
+                            torch.save(content, os.path.join(exp_path, 'content_backup.pth'))
+                        if args.use_ema:
+                            optimizerG.swap_parameters_with_ema(store_params_in_ema=True)                        
+                        if args.use_ema and rank == 0:
+                            torch.save(netG.state_dict(), os.path.join(exp_path, 'netG_{}.pth'.format(epoch)))
+                        if args.use_ema:
+                            optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
+                        #if args.use_ema:
+                        #    dist.barrier()
+                        print("Saved content")
+                    else:
+                        if rank == 0:
+                            content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
+                                    'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
+                                    'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
+                                    'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict()}                    
+                            torch.save(content, os.path.join(exp_path, 'content.pth'))
+                            torch.save(content, os.path.join(exp_path, 'content_backup.pth'))
+                            if args.use_ema:
+                                optimizerG.swap_parameters_with_ema(store_params_in_ema=True)                        
+                            torch.save(netG.state_dict(), os.path.join(exp_path, 'netG_{}.pth'.format(epoch)))
+                            if args.use_ema:
+                                optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
+
             
         if not args.no_lr_decay:
             
             schedulerG.step()
             schedulerD.step()
-        
+        """
         if rank == 0:
             if epoch % 10 == 0:
                 torchvision.utils.save_image(x_pos_sample, os.path.join(exp_path, 'xpos_epoch_{}.png'.format(epoch)), normalize=True)
             
             x_t_1 = torch.randn_like(real_data)
-            fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args, cond=(cond_pooled, cond, cond_mask))
+            with autocast():
+                fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args, cond=(cond_pooled, cond, cond_mask))
             torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)), normalize=True)
             
             if args.save_content:
@@ -606,7 +700,8 @@ def train(rank, gpu, args):
                 torch.save(netG.state_dict(), os.path.join(exp_path, 'netG_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(store_params_in_ema=True)
-            
+        dist.barrier()
+        """
 
 
 def init_processes(rank, size, fn, args):
@@ -641,6 +736,8 @@ if __name__ == '__main__':
     parser.add_argument('--mismatch_loss', action='store_true',default=False)
     parser.add_argument('--text_encoder', type=str, default="google/t5-v1_1-base")
     parser.add_argument('--cross_attention', action='store_true',default=False)
+    parser.add_argument('--fsdp', action='store_true',default=False)
+    parser.add_argument('--grad_checkpointing', action='store_true',default=False)
 
     parser.add_argument('--image_size', type=int, default=32,
                             help='size of image')
@@ -728,6 +825,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
     parser.add_argument('--discr_type', type=str, default="large")
     parser.add_argument('--preprocessing', type=str, default="resize")
+    parser.add_argument('--precision', type=str, default="fp32")
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,

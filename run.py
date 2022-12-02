@@ -132,6 +132,8 @@ def ddgan_laion_aesthetic_v2():
 def ddgan_laion_aesthetic_v3():
     cfg = ddgan_laion_aesthetic_v1()
     cfg['model']['text_encoder'] = "google/t5-v1_1-xl" 
+    cfg['model']['mismatch_loss'] = ''
+    cfg['model']['grad_penalty_cond'] = ''
     return cfg
 
 def ddgan_laion_aesthetic_v4():
@@ -144,6 +146,85 @@ def ddgan_laion_aesthetic_v5():
     cfg = ddgan_laion_aesthetic_v1()
     cfg['model']['mismatch_loss'] = ''
     cfg['model']['grad_penalty_cond'] = ''
+    return cfg
+
+
+
+def ddgan_laion2b_v1():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['mismatch_loss'] = ''
+    cfg['model']['grad_penalty_cond'] = ''
+    cfg['model']['num_channels_dae'] = 224
+    cfg['model']['batch_size'] = 2
+    cfg['model']['discr_type'] = "large_cond_attn"
+    cfg['model']['preprocessing'] = 'random_resized_crop_v1'
+    return cfg
+
+def ddgan_laion_aesthetic_v6():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['no_lr_decay'] = ''
+    return cfg
+
+
+
+def ddgan_laion_aesthetic_v7():
+    cfg = ddgan_laion_aesthetic_v6()
+    cfg['model']['r1_gamma'] = 5
+    return cfg
+
+
+def ddgan_laion_aesthetic_v8():
+    cfg = ddgan_laion_aesthetic_v6()
+    cfg['model']['num_timesteps'] = 8
+    return cfg
+
+def ddgan_laion_aesthetic_v9():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['num_channels_dae'] = 384
+    return cfg
+
+def ddgan_sd_v1():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_sd_v2():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_sd_v3():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_sd_v4():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_sd_v5():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['num_timesteps'] = 8
+    return cfg
+def ddgan_sd_v6():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['num_channels_dae'] = 192
+    return cfg
+def ddgan_sd_v7():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_sd_v8():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['image_size'] = 512
+    return cfg
+def ddgan_laion_aesthetic_v12():
+    cfg = ddgan_laion_aesthetic_v3()
+    return cfg
+def ddgan_laion_aesthetic_v13():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['text_encoder'] = "openclip/ViT-H-14/laion2b_s32b_b79k" 
+    return cfg
+
+def ddgan_laion_aesthetic_v14():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['text_encoder'] = "openclip/ViT-H-14/laion2b_s32b_b79k" 
+    return cfg
+def ddgan_sd_v9():
+    cfg = ddgan_laion_aesthetic_v3()
+    cfg['model']['text_encoder'] = "openclip/ViT-H-14/laion2b_s32b_b79k" 
     return cfg
 
 models = [
@@ -166,6 +247,23 @@ models = [
     ddgan_laion_aesthetic_v3, # like ddgan_laion_aesthetic_v1 but trained from scratch with T5-XL (continue from 23aug with mismatch and grad penalty and random_resized_crop_v1)
     ddgan_laion_aesthetic_v4, # like ddgan_laion_aesthetic_v1 but trained from scratch with OpenAI's ClipEncoder 
     ddgan_laion_aesthetic_v5, # fine-tune ddgan_laion_aesthetic_v1 with mismatch and cond grad penalty  losses
+    ddgan_laion_aesthetic_v6, # like v3 but without lr decay
+    ddgan_laion_aesthetic_v7, # like v6 but  with r1 gamma of 5 instead of 1, trying to constrain the discr more.
+    ddgan_laion_aesthetic_v8, # like v6 but with 8 timesteps
+    ddgan_laion_aesthetic_v9,
+    ddgan_laion_aesthetic_v12,
+    ddgan_laion_aesthetic_v13,
+    ddgan_laion_aesthetic_v14,
+    ddgan_laion2b_v1,
+    ddgan_sd_v1,
+    ddgan_sd_v2,
+    ddgan_sd_v3,
+    ddgan_sd_v4,
+    ddgan_sd_v5,
+    ddgan_sd_v6,
+    ddgan_sd_v7,
+    ddgan_sd_v8,
+    ddgan_sd_v9,
 ]
 
 def get_model(model_name):
@@ -174,7 +272,7 @@ def get_model(model_name):
             return model()
 
 
-def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guidance_scale:float=0, fid=False, real_img_dir="", q=0.0, seed=0, nb_images_for_fid=0, scale_factor_h=1, scale_factor_w=1, compute_clip_score=False):
+def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guidance_scale:float=0, fid=False, real_img_dir="", q=0.0, seed=0, nb_images_for_fid=0, scale_factor_h=1, scale_factor_w=1, compute_clip_score=False, eval_name="", scale_method="convolutional"):
 
     cfg = get_model(model_name)
     model = cfg['model']
@@ -204,13 +302,15 @@ def test(model_name, *, cond_text="", batch_size:int=None, epoch:int=None, guida
     args['scale_factor_h'] = scale_factor_h
     args['scale_factor_w'] = scale_factor_w
     args['n_mlp'] = model.get("n_mlp")
+    args['scale_method'] = scale_method
     if fid:
         args['compute_fid'] = ''
         args['real_img_dir'] = real_img_dir 
         args['nb_images_for_fid'] = nb_images_for_fid
     if compute_clip_score:
         args['compute_clip_score'] = ""
-
+    if eval_name:
+        args["eval_name"] = eval_name
     cmd = "python -u test_ddgan.py " + " ".join(f"--{k} {v}" for k, v in args.items() if v is not None)
     print(cmd)
     call(cmd, shell=True)

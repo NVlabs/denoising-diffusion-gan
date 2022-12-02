@@ -41,7 +41,8 @@ class ResampledShards2(IterableDataset):
         """
         super().__init__()
         #urls = wds.shardlists.expand_urls(urls)
-        urls = list(braceexpand.braceexpand(urls))
+        if type(urls) != list:
+            urls = list(braceexpand.braceexpand(urls))
         self.urls = urls
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
